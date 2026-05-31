@@ -1,21 +1,27 @@
 from flask import Flask, jsonify, request
 from datetime import datetime
+import requests
+import threading
+import time
+import os
 
 app = Flask(__name__)
 
-# Historique des visiteurs
-# Version simple en mémoire pour la simulation
+# À mettre dans Render Environment Variables
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+CHAT_ID = os.environ.get("CHAT_ID", "8232723414")
+
 visiteurs = []
 
-# État de la porte
 etat_porte = {
     "etat": "fermee",
     "dernier_changement": None
 }
 
+last_update_id = None
 
-def ajouter_visiteur(source="ESP32-Wokwi"):
-    """Ajoute un visiteur avec date et heure."""
+
+def ajouter_visiteur(source="Telegram"):
     maintenant = datetime.now()
 
     visite = {
@@ -28,7 +34,50 @@ def ajouter_visiteur(source="ESP32-Wokwi"):
     }
 
     visiteurs.append(visite)
+    print("Visiteur ajouté :", visite)
     return visite
+
+
+def lire_telegram():
+    global last_update_id
+
+    if not BOT_TOKEN:
+        print("BOT_TOKEN manquant")
+        return
+
+    url = f"https://api.telegram.org/bot8367660862:AAHsBXuGHFtZ-7DVnwk08N04dQWDm446YwQ/getUpdates"
+
+    params = {}
+    if last_update_id is not None:
+        params["offset"] = last_update_id + 1
+
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+
+        if not data.get("ok"):
+            print("Erreur Telegram :", data)
+            return
+
+        for update in data.get("result", []):
+            last_update_id = update["update_id"]
+
+            message = update.get("message", {})
+            text = message.get("text", "")
+            chat = message.get("chat", {})
+            chat_id = str(chat.get("id", ""))
+
+            if chat_id == str(CHAT_ID) and "Alerte interphone" in text:
+                ajouter_visiteur(source="Telegram ESP32-Wokwi")
+
+    except Exception as e:
+        print("Erreur lecture Telegram :", e)
+
+
+def boucle_telegram():
+    while True:
+        lire_telegram()
+        time.sleep(5)
 
 
 @app.route("/")
@@ -54,7 +103,7 @@ def accueil():
                 padding: 20px;
                 border-radius: 12px;
                 box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-                max-width: 700px;
+                max-width: 760px;
             }
             a {
                 display: block;
@@ -74,24 +123,32 @@ def accueil():
             <p>Serveur Flask actif.</p>
 
             <h3>Menu</h3>
-            <a href="/sonnette">Simuler une sonnerie</a>
+            <a href="/sync-telegram">Synchroniser Telegram</a>
+            <a href="/sonnette">Simuler une sonnerie locale</a>
             <a href="/visiteurs">Voir l'historique des visiteurs</a>
             <a href="/api/visiteurs">API JSON visiteurs</a>
             <a href="/ouvrir">Ouvrir la porte</a>
             <a href="/etat-porte">Voir état de la porte</a>
+            <a href="/reset">Réinitialiser historique</a>
         </div>
     </body>
     </html>
     """
 
 
+@app.route("/sync-telegram")
+def sync_telegram():
+    lire_telegram()
+    return jsonify({
+        "status": "success",
+        "message": "Synchronisation Telegram terminée",
+        "nombre_visiteurs": len(visiteurs)
+    })
+
+
 @app.route("/sonnette", methods=["GET", "POST"])
 def sonnette():
-    """
-    Route appelée par l'ESP32/Wokwi quand le bouton sonnette est appuyé.
-    Elle enregistre un visiteur avec horodatage.
-    """
-    source = "ESP32-Wokwi"
+    source = "Simulation locale Flask"
 
     if request.method == "POST":
         data = request.get_json(silent=True)
@@ -109,7 +166,6 @@ def sonnette():
 
 @app.route("/visiteurs")
 def afficher_visiteurs():
-    """Affiche l'historique des visiteurs en HTML."""
     lignes = ""
 
     if len(visiteurs) == 0:
@@ -198,7 +254,6 @@ def afficher_visiteurs():
 
 @app.route("/api/visiteurs")
 def api_visiteurs():
-    """API utilisée plus tard par l'application Kivy."""
     return jsonify({
         "status": "success",
         "nombre_visiteurs": len(visiteurs),
@@ -208,10 +263,6 @@ def api_visiteurs():
 
 @app.route("/ouvrir", methods=["GET", "POST"])
 def ouvrir_porte():
-    """
-    Route pour simuler l'ouverture de la porte.
-    Plus tard, Kivy pourra appeler cette route.
-    """
     maintenant = datetime.now()
 
     etat_porte["etat"] = "ouverte"
@@ -226,7 +277,6 @@ def ouvrir_porte():
 
 @app.route("/fermer", methods=["GET", "POST"])
 def fermer_porte():
-    """Route pour simuler la fermeture de la porte."""
     maintenant = datetime.now()
 
     etat_porte["etat"] = "fermee"
@@ -241,7 +291,6 @@ def fermer_porte():
 
 @app.route("/etat-porte")
 def voir_etat_porte():
-    """Retourne l'état actuel de la porte."""
     return jsonify({
         "status": "success",
         "etat_porte": etat_porte
@@ -250,7 +299,6 @@ def voir_etat_porte():
 
 @app.route("/reset")
 def reset_historique():
-    """Réinitialise l'historique. Utile pendant les tests."""
     visiteurs.clear()
 
     return jsonify({
@@ -259,5 +307,11 @@ def reset_historique():
     })
 
 
+# Lancer la synchronisation Telegram en arrière-plan
+thread = threading.Thread(target=boucle_telegram)
+thread.daemon = True
+thread.start()
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
