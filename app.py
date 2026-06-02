@@ -2,8 +2,8 @@ from flask import Flask, jsonify, request, url_for
 from datetime import datetime
 import threading
 import time
-import paho.mqtt.client as mqtt
 import uuid
+import paho.mqtt.client as mqtt
 
 app = Flask(__name__)
 
@@ -21,9 +21,10 @@ mqtt_client = None
 mqtt_connected = False
 
 # ==========================
-# DONNÉES DU SYSTÈME
+# DONNÉES
 # ==========================
 visiteurs = []
+mqtt_logs = []
 
 etat_porte = {
     "etat": "fermee",
@@ -34,7 +35,7 @@ etat_porte = {
 
 
 # ==========================
-# GESTION VISITEURS
+# FONCTIONS VISITEURS / PORTE
 # ==========================
 def ajouter_visiteur(source="ESP32-Wokwi MQTT"):
     maintenant = datetime.now()
@@ -98,9 +99,15 @@ def on_disconnect(client, userdata, rc):
 
 def on_message(client, userdata, msg):
     topic = msg.topic
-    payload = msg.payload.decode("utf-8", errors="ignore")
+    payload = msg.payload.decode("utf-8", errors="ignore").strip()
 
     print("MQTT reçu :", topic, "=>", payload)
+
+    mqtt_logs.append({
+        "topic": topic,
+        "payload": payload,
+        "time": datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    })
 
     if topic == TOPIC_VISITOR:
         if payload.upper() in ["VISITOR", "VISITEUR", "SONNETTE"]:
@@ -113,6 +120,7 @@ def on_message(client, userdata, msg):
                 "Relais activé côté ESP32",
                 "ESP32-Wokwi MQTT"
             )
+
         elif payload.upper() == "CLOSED":
             changer_etat_porte(
                 "fermee",
@@ -140,25 +148,29 @@ def start_mqtt():
         print("Erreur MQTT :", e)
 
 
-def publier_commande_mqtt(commande):
+def publier_mqtt(topic, message):
     global mqtt_client
 
     if mqtt_client is None:
         return False, "Client MQTT non initialisé"
 
     try:
-        result = mqtt_client.publish(TOPIC_COMMAND, commande)
+        result = mqtt_client.publish(topic, message)
         result.wait_for_publish(timeout=5)
 
         if result.is_published():
-            print("Commande MQTT publiée :", commande)
-            return True, "Commande MQTT publiée"
+            print("MQTT publié :", topic, "=>", message)
+            return True, "Message MQTT publié"
         else:
             return False, "Publication MQTT échouée"
 
     except Exception as e:
         print("Erreur publication MQTT :", e)
         return False, str(e)
+
+
+def publier_commande_mqtt(commande):
+    return publier_mqtt(TOPIC_COMMAND, commande)
 
 
 # ==========================
@@ -255,10 +267,12 @@ def accueil():
                     <a class="button" href="/sonnette">Simuler une sonnerie locale</a>
                     <a class="button" href="/visiteurs">Galerie visiteurs</a>
                     <a class="button secondary" href="/api/visiteurs">API JSON visiteurs</a>
-                    <a class="button" href="/ouvrir">Ouvrir la porte via MQTT</a>
-                    <a class="button secondary" href="/fermer">Fermer la porte via MQTT</a>
+                    <a class="button" href="/ouvrir">Ouvrir la porte MQTT</a>
+                    <a class="button secondary" href="/fermer">Fermer la porte MQTT</a>
                     <a class="button secondary" href="/etat-porte">État de la porte</a>
                     <a class="button secondary" href="/mqtt-info">Infos MQTT</a>
+                    <a class="button secondary" href="/mqtt-logs">Logs MQTT</a>
+                    <a class="button secondary" href="/test-mqtt-visitor">Tester visiteur MQTT</a>
                     <a class="button danger" href="/reset">Réinitialiser historique</a>
                 </div>
 
@@ -428,6 +442,8 @@ def afficher_visiteurs():
                 <a class="button" href="/sonnette">Ajouter visiteur test</a>
                 <a class="button secondary" href="/ouvrir">Ouvrir porte MQTT</a>
                 <a class="button secondary" href="/fermer">Fermer porte MQTT</a>
+                <a class="button secondary" href="/mqtt-logs">Logs MQTT</a>
+                <a class="button secondary" href="/test-mqtt-visitor">Test MQTT visiteur</a>
                 <a class="button danger" href="/reset">Reset</a>
             </div>
 
@@ -509,13 +525,34 @@ def mqtt_info():
     })
 
 
+@app.route("/mqtt-logs")
+def voir_mqtt_logs():
+    return jsonify({
+        "status": "success",
+        "logs": mqtt_logs[-30:]
+    })
+
+
+@app.route("/test-mqtt-visitor")
+def test_mqtt_visitor():
+    ok, message = publier_mqtt(TOPIC_VISITOR, "VISITOR")
+
+    return jsonify({
+        "status": "success" if ok else "error",
+        "message": message,
+        "topic": TOPIC_VISITOR,
+        "payload": "VISITOR"
+    })
+
+
 @app.route("/reset")
 def reset_historique():
     visiteurs.clear()
+    mqtt_logs.clear()
 
     return jsonify({
         "status": "success",
-        "message": "Historique réinitialisé"
+        "message": "Historique et logs MQTT réinitialisés"
     })
 
 
