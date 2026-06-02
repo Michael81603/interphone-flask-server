@@ -80,12 +80,10 @@ def on_connect(client, userdata, flags, rc):
         mqtt_connected = True
         print("MQTT connecté au broker HiveMQ")
 
-        client.subscribe(TOPIC_VISITOR)
-        client.subscribe(TOPIC_STATUS)
+        client.subscribe("interphone/rakezyadiams/v2/#")
 
-        print("Abonné aux topics :")
-        print("-", TOPIC_VISITOR)
-        print("-", TOPIC_STATUS)
+        print("Abonné au topic global :")
+        print("- interphone/rakezyadiams/v2/#")
     else:
         mqtt_connected = False
         print("Erreur connexion MQTT, code :", rc)
@@ -110,19 +108,13 @@ def on_message(client, userdata, msg):
         "time": datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     })
 
-    # IMPORTANT :
-    # Dès qu'un message commence par VISITOR, on ajoute un visiteur.
-    # Ça accepte VISITOR, VISITOR:33013, VISITEUR, SONNETTE...
-    if (
-        payload_upper.startswith("VISITOR")
-        or payload_upper.startswith("VISITEUR")
-        or payload_upper.startswith("SONNETTE")
-    ):
+    # Si Wokwi envoie VISITOR, VISITOR:12345, VISITEUR, SONNETTE...
+    if payload_upper.startswith("VISITOR") or payload_upper.startswith("VISITEUR") or payload_upper.startswith("SONNETTE"):
         ajouter_visiteur(source="ESP32-Wokwi MQTT")
-        print("Visiteur ajouté depuis MQTT")
+        print("Visiteur ajouté depuis Wokwi MQTT")
         return
 
-    # Statut porte venant de Wokwi
+    # Statut porte
     if payload_upper == "OPENED":
         changer_etat_porte(
             "ouverte",
@@ -140,7 +132,6 @@ def on_message(client, userdata, msg):
         return
 
     print("Message MQTT reçu mais non traité :", payload)
-
 
 def start_mqtt():
     global mqtt_client
