@@ -100,6 +100,7 @@ def on_disconnect(client, userdata, rc):
 def on_message(client, userdata, msg):
     topic = msg.topic
     payload = msg.payload.decode("utf-8", errors="ignore").strip()
+    payload_upper = payload.upper()
 
     print("MQTT reçu :", topic, "=>", payload)
 
@@ -109,27 +110,26 @@ def on_message(client, userdata, msg):
         "time": datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     })
 
-    if topic == TOPIC_VISITOR:
-        payload_upper = payload.upper()
+    # Visiteur détecté depuis ESP32/Wokwi
+    if payload_upper.startswith("VISITOR") or payload_upper.startswith("VISITEUR") or payload_upper.startswith("SONNETTE"):
+        ajouter_visiteur(source="ESP32-Wokwi MQTT")
+        return
 
-        if payload_upper.startswith("VISITOR") or payload_upper.startswith("VISITEUR") or payload_upper.startswith("SONNETTE"):
-            ajouter_visiteur(source="ESP32-Wokwi MQTT")
-
-    elif topic == TOPIC_STATUS:
-        if payload.upper() == "OPENED":
+    # État porte reçu depuis ESP32/Wokwi
+    if topic == TOPIC_STATUS:
+        if payload_upper == "OPENED":
             changer_etat_porte(
                 "ouverte",
                 "Relais activé côté ESP32",
                 "ESP32-Wokwi MQTT"
             )
 
-        elif payload.upper() == "CLOSED":
+        elif payload_upper == "CLOSED":
             changer_etat_porte(
                 "fermee",
                 "Relais désactivé côté ESP32",
                 "ESP32-Wokwi MQTT"
             )
-
 
 def start_mqtt():
     global mqtt_client
