@@ -1,22 +1,42 @@
 from flask import Flask, jsonify, request, url_for
 from datetime import datetime
+import threading
+import time
+import paho.mqtt.client as mqtt
+import uuid
 
 app = Flask(__name__)
 
-# Historique des visiteurs en mémoire
-# Pour le projet simulation, c'est suffisant.
+# ==========================
+# MQTT CONFIGURATION
+# ==========================
+MQTT_BROKER = "broker.hivemq.com"
+MQTT_PORT = 1883
+
+TOPIC_VISITOR = "interphone/rakezyadiams/visitor"
+TOPIC_COMMAND = "interphone/rakezyadiams/command"
+TOPIC_STATUS = "interphone/rakezyadiams/status"
+
+mqtt_client = None
+mqtt_connected = False
+
+# ==========================
+# DONNÉES DU SYSTÈME
+# ==========================
 visiteurs = []
 
-# État simulé de la porte / relais
 etat_porte = {
     "etat": "fermee",
     "dernier_changement": "Aucun changement",
-    "commande": "Aucune"
+    "commande": "Aucune",
+    "source": "Initialisation"
 }
 
 
-def ajouter_visiteur(source="Flask / Telegram"):
-    """Ajoute un visiteur avec horodatage."""
+# ==========================
+# GESTION VISITEURS
+# ==========================
+def ajouter_visiteur(source="ESP32-Wokwi MQTT"):
     maintenant = datetime.now()
 
     visite = {
@@ -29,14 +49,121 @@ def ajouter_visiteur(source="Flask / Telegram"):
     }
 
     visiteurs.append(visite)
+    print("Visiteur ajouté :", visite)
     return visite
 
 
+def changer_etat_porte(etat, commande, source):
+    maintenant = datetime.now()
+
+    etat_porte["etat"] = etat
+    etat_porte["dernier_changement"] = maintenant.strftime("%d/%m/%Y %H:%M:%S")
+    etat_porte["commande"] = commande
+    etat_porte["source"] = source
+
+    print("État porte :", etat_porte)
+    return etat_porte
+
+
 def get_photo_url():
-    """Retourne le chemin de la photo simulée."""
     return url_for("static", filename="photo_simulee.jpg")
 
 
+# ==========================
+# MQTT CALLBACKS
+# ==========================
+def on_connect(client, userdata, flags, rc):
+    global mqtt_connected
+
+    if rc == 0:
+        mqtt_connected = True
+        print("MQTT connecté au broker HiveMQ")
+
+        client.subscribe(TOPIC_VISITOR)
+        client.subscribe(TOPIC_STATUS)
+
+        print("Abonné aux topics :")
+        print("-", TOPIC_VISITOR)
+        print("-", TOPIC_STATUS)
+    else:
+        mqtt_connected = False
+        print("Erreur connexion MQTT, code :", rc)
+
+
+def on_disconnect(client, userdata, rc):
+    global mqtt_connected
+    mqtt_connected = False
+    print("MQTT déconnecté, code :", rc)
+
+
+def on_message(client, userdata, msg):
+    topic = msg.topic
+    payload = msg.payload.decode("utf-8", errors="ignore")
+
+    print("MQTT reçu :", topic, "=>", payload)
+
+    if topic == TOPIC_VISITOR:
+        if payload.upper() in ["VISITOR", "VISITEUR", "SONNETTE"]:
+            ajouter_visiteur(source="ESP32-Wokwi MQTT")
+
+    elif topic == TOPIC_STATUS:
+        if payload.upper() == "OPENED":
+            changer_etat_porte(
+                "ouverte",
+                "Relais activé côté ESP32",
+                "ESP32-Wokwi MQTT"
+            )
+        elif payload.upper() == "CLOSED":
+            changer_etat_porte(
+                "fermee",
+                "Relais désactivé côté ESP32",
+                "ESP32-Wokwi MQTT"
+            )
+
+
+def start_mqtt():
+    global mqtt_client
+
+    try:
+        mqtt_client = mqtt.Client(
+            client_id=f"flask-interphone-rakezyadiams-{uuid.uuid4()}"
+        )
+
+        mqtt_client.on_connect = on_connect
+        mqtt_client.on_disconnect = on_disconnect
+        mqtt_client.on_message = on_message
+
+        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        mqtt_client.loop_forever()
+
+    except Exception as e:
+        print("Erreur MQTT :", e)
+
+
+def publier_commande_mqtt(commande):
+    global mqtt_client
+
+    if mqtt_client is None:
+        return False, "Client MQTT non initialisé"
+
+    try:
+        result = mqtt_client.publish(TOPIC_COMMAND, commande)
+        result.wait_for_publish(timeout=5)
+
+        if result.is_published():
+            print("Commande MQTT publiée :", commande)
+            return True, "Commande MQTT publiée"
+        else:
+            return False, "Publication MQTT échouée"
+
+    except Exception as e:
+        print("Erreur publication MQTT :", e)
+        return False, str(e)
+
+
+# ==========================
+# ROUTES FLASK
+# ==========================
 @app.route("/")
 def accueil():
     return f"""
@@ -112,28 +239,33 @@ def accueil():
             <div class="card">
                 <h1>Interphone vidéo connecté</h1>
                 <p class="subtitle">
-                    Serveur Flask — galerie visiteurs horodatée, historique et commande relais simulée.
+                    Serveur Flask — galerie visiteurs horodatée, historique, MQTT et commande relais.
                 </p>
 
                 <div class="status">
+                    <strong>MQTT :</strong> {"connecté" if mqtt_connected else "non connecté"}<br>
+                    <strong>Broker :</strong> {MQTT_BROKER}:{MQTT_PORT}<br>
                     <strong>État de la porte :</strong> {etat_porte["etat"]}<br>
                     <strong>Dernier changement :</strong> {etat_porte["dernier_changement"]}<br>
-                    <strong>Dernière commande :</strong> {etat_porte["commande"]}
+                    <strong>Dernière commande :</strong> {etat_porte["commande"]}<br>
+                    <strong>Nombre visiteurs :</strong> {len(visiteurs)}
                 </div>
 
                 <div class="grid">
-                    <a class="button" href="/sonnette">Simuler une sonnerie</a>
+                    <a class="button" href="/sonnette">Simuler une sonnerie locale</a>
                     <a class="button" href="/visiteurs">Galerie visiteurs</a>
                     <a class="button secondary" href="/api/visiteurs">API JSON visiteurs</a>
-                    <a class="button" href="/ouvrir">Ouvrir la porte</a>
-                    <a class="button secondary" href="/fermer">Fermer la porte</a>
+                    <a class="button" href="/ouvrir">Ouvrir la porte via MQTT</a>
+                    <a class="button secondary" href="/fermer">Fermer la porte via MQTT</a>
                     <a class="button secondary" href="/etat-porte">État de la porte</a>
+                    <a class="button secondary" href="/mqtt-info">Infos MQTT</a>
                     <a class="button danger" href="/reset">Réinitialiser historique</a>
                 </div>
 
                 <p class="small">
-                    Dans la simulation, la photo est représentée par une image statique.
-                    Le relais est simulé côté Wokwi et la commande web est représentée par les routes Flask.
+                    L’ESP32 Wokwi publie les événements de sonnerie via MQTT.
+                    Flask enregistre automatiquement les visiteurs.
+                    Kivy commande la porte via Flask, puis Flask publie OPEN/CLOSE vers l’ESP32.
                 </p>
             </div>
         </div>
@@ -144,11 +276,7 @@ def accueil():
 
 @app.route("/sonnette", methods=["GET", "POST"])
 def sonnette():
-    """
-    Enregistre un visiteur.
-    Cette route peut être ouverte depuis le lien Telegram reçu après appui sur la sonnette.
-    """
-    source = "Lien Telegram / Flask"
+    source = "Simulation locale Flask"
 
     if request.method == "POST":
         data = request.get_json(silent=True)
@@ -166,7 +294,6 @@ def sonnette():
 
 @app.route("/visiteurs")
 def afficher_visiteurs():
-    """Galerie visiteurs horodatée."""
     if len(visiteurs) == 0:
         contenu = """
         <div class="empty">
@@ -175,7 +302,7 @@ def afficher_visiteurs():
         """
     else:
         contenu = ""
-        for visite in visiteurs:
+        for visite in reversed(visiteurs):
             contenu += f"""
             <div class="visitor-card">
                 <div class="photo-box">
@@ -291,6 +418,7 @@ def afficher_visiteurs():
 
             <div class="status">
                 <strong>Nombre de visiteurs :</strong> {len(visiteurs)}<br>
+                <strong>MQTT :</strong> {"connecté" if mqtt_connected else "non connecté"}<br>
                 <strong>État de la porte :</strong> {etat_porte["etat"]}<br>
                 <strong>Dernier changement :</strong> {etat_porte["dernier_changement"]}
             </div>
@@ -298,8 +426,8 @@ def afficher_visiteurs():
             <div class="top-actions">
                 <a class="button" href="/">Accueil</a>
                 <a class="button" href="/sonnette">Ajouter visiteur test</a>
-                <a class="button secondary" href="/ouvrir">Ouvrir porte</a>
-                <a class="button secondary" href="/fermer">Fermer porte</a>
+                <a class="button secondary" href="/ouvrir">Ouvrir porte MQTT</a>
+                <a class="button secondary" href="/fermer">Fermer porte MQTT</a>
                 <a class="button danger" href="/reset">Reset</a>
             </div>
 
@@ -314,7 +442,6 @@ def afficher_visiteurs():
 
 @app.route("/api/visiteurs")
 def api_visiteurs():
-    """API JSON pour l'application Kivy."""
     return jsonify({
         "status": "success",
         "nombre_visiteurs": len(visiteurs),
@@ -324,48 +451,66 @@ def api_visiteurs():
 
 @app.route("/ouvrir", methods=["GET", "POST"])
 def ouvrir_porte():
-    """Commande web simulée du relais : ouverture porte."""
-    maintenant = datetime.now()
+    ok, message = publier_commande_mqtt("OPEN")
 
-    etat_porte["etat"] = "ouverte"
-    etat_porte["dernier_changement"] = maintenant.strftime("%d/%m/%Y %H:%M:%S")
-    etat_porte["commande"] = "Ouverture demandée depuis Flask"
+    changer_etat_porte(
+        "ouverte",
+        "Commande OPEN envoyée via MQTT",
+        "Flask/Kivy"
+    )
 
     return jsonify({
-        "status": "success",
-        "message": "Commande relais : porte ouverte",
+        "status": "success" if ok else "error",
+        "message": message,
+        "commande_mqtt": "OPEN",
         "etat_porte": etat_porte
     })
 
 
 @app.route("/fermer", methods=["GET", "POST"])
 def fermer_porte():
-    """Commande web simulée du relais : fermeture porte."""
-    maintenant = datetime.now()
+    ok, message = publier_commande_mqtt("CLOSE")
 
-    etat_porte["etat"] = "fermee"
-    etat_porte["dernier_changement"] = maintenant.strftime("%d/%m/%Y %H:%M:%S")
-    etat_porte["commande"] = "Fermeture demandée depuis Flask"
+    changer_etat_porte(
+        "fermee",
+        "Commande CLOSE envoyée via MQTT",
+        "Flask/Kivy"
+    )
 
     return jsonify({
-        "status": "success",
-        "message": "Commande relais : porte fermée",
+        "status": "success" if ok else "error",
+        "message": message,
+        "commande_mqtt": "CLOSE",
         "etat_porte": etat_porte
     })
 
 
 @app.route("/etat-porte")
 def voir_etat_porte():
-    """État actuel de la porte pour Flask/Kivy."""
     return jsonify({
         "status": "success",
+        "mqtt_connected": mqtt_connected,
         "etat_porte": etat_porte
+    })
+
+
+@app.route("/mqtt-info")
+def mqtt_info():
+    return jsonify({
+        "status": "success",
+        "mqtt_connected": mqtt_connected,
+        "broker": MQTT_BROKER,
+        "port": MQTT_PORT,
+        "topics": {
+            "visitor": TOPIC_VISITOR,
+            "command": TOPIC_COMMAND,
+            "status": TOPIC_STATUS
+        }
     })
 
 
 @app.route("/reset")
 def reset_historique():
-    """Réinitialise l'historique de test."""
     visiteurs.clear()
 
     return jsonify({
@@ -374,5 +519,13 @@ def reset_historique():
     })
 
 
+# ==========================
+# DÉMARRAGE MQTT
+# ==========================
+mqtt_thread = threading.Thread(target=start_mqtt)
+mqtt_thread.daemon = True
+mqtt_thread.start()
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=False)
