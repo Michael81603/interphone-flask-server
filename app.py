@@ -13,9 +13,9 @@ app = Flask(__name__)
 MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
 
-TOPIC_VISITOR = "interphone/rakezyadiams/visitor"
-TOPIC_COMMAND = "interphone/rakezyadiams/command"
-TOPIC_STATUS = "interphone/rakezyadiams/status"
+TOPIC_VISITOR = "interphone/rakezyadiams/v2/visitor"
+TOPIC_COMMAND = "interphone/rakezyadiams/v2/command"
+TOPIC_STATUS = "interphone/rakezyadiams/v2/status"
 
 mqtt_client = None
 mqtt_connected = False
@@ -110,7 +110,9 @@ def on_message(client, userdata, msg):
     })
 
     if topic == TOPIC_VISITOR:
-        if payload.upper() in ["VISITOR", "VISITEUR", "SONNETTE"]:
+        payload_upper = payload.upper()
+
+        if payload_upper.startswith("VISITOR") or payload_upper.startswith("VISITEUR") or payload_upper.startswith("SONNETTE"):
             ajouter_visiteur(source="ESP32-Wokwi MQTT")
 
     elif topic == TOPIC_STATUS:
