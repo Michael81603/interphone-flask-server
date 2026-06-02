@@ -554,13 +554,23 @@ def voir_mqtt_logs():
 @app.route("/test-mqtt-visitor")
 def test_mqtt_visitor():
     payload = f"VISITOR:{int(time.time())}"
+
     ok, message = publier_mqtt(TOPIC_VISITOR, payload)
+
+    mqtt_logs.append({
+        "topic": TOPIC_VISITOR,
+        "payload": payload,
+        "time": datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    })
+
+    visite = ajouter_visiteur(source="Test MQTT Flask")
 
     return jsonify({
         "status": "success" if ok else "error",
         "message": message,
         "topic": TOPIC_VISITOR,
-        "payload": payload
+        "payload": payload,
+        "visiteur": visite
     })
 
 
