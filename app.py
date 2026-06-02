@@ -7,9 +7,9 @@ import paho.mqtt.client as mqtt
 
 app = Flask(__name__)
 
-# ==========================
+# =========================================================
 # MQTT CONFIGURATION
-# ==========================
+# =========================================================
 MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
 
@@ -20,9 +20,9 @@ TOPIC_STATUS = "interphone/rakezyadiams/v2/status"
 mqtt_client = None
 mqtt_connected = False
 
-# ==========================
-# DONNÉES
-# ==========================
+# =========================================================
+# DONNÉES DU SYSTÈME
+# =========================================================
 visiteurs = []
 mqtt_logs = []
 
@@ -34,9 +34,9 @@ etat_porte = {
 }
 
 
-# ==========================
-# FONCTIONS VISITEURS / PORTE
-# ==========================
+# =========================================================
+# GESTION VISITEURS / PORTE
+# =========================================================
 def ajouter_visiteur(source="ESP32-Wokwi MQTT"):
     maintenant = datetime.now()
 
@@ -70,9 +70,9 @@ def get_photo_url():
     return url_for("static", filename="photo_simulee.jpg")
 
 
-# ==========================
+# =========================================================
 # MQTT CALLBACKS
-# ==========================
+# =========================================================
 def on_connect(client, userdata, flags, rc):
     global mqtt_connected
 
@@ -110,26 +110,37 @@ def on_message(client, userdata, msg):
         "time": datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     })
 
-    # Visiteur détecté depuis ESP32/Wokwi
-    if payload_upper.startswith("VISITOR") or payload_upper.startswith("VISITEUR") or payload_upper.startswith("SONNETTE"):
+    # IMPORTANT :
+    # Dès qu'un message commence par VISITOR, on ajoute un visiteur.
+    # Ça accepte VISITOR, VISITOR:33013, VISITEUR, SONNETTE...
+    if (
+        payload_upper.startswith("VISITOR")
+        or payload_upper.startswith("VISITEUR")
+        or payload_upper.startswith("SONNETTE")
+    ):
         ajouter_visiteur(source="ESP32-Wokwi MQTT")
+        print("Visiteur ajouté depuis MQTT")
         return
 
-    # État porte reçu depuis ESP32/Wokwi
-    if topic == TOPIC_STATUS:
-        if payload_upper == "OPENED":
-            changer_etat_porte(
-                "ouverte",
-                "Relais activé côté ESP32",
-                "ESP32-Wokwi MQTT"
-            )
+    # Statut porte venant de Wokwi
+    if payload_upper == "OPENED":
+        changer_etat_porte(
+            "ouverte",
+            "Relais activé côté ESP32",
+            "ESP32-Wokwi MQTT"
+        )
+        return
 
-        elif payload_upper == "CLOSED":
-            changer_etat_porte(
-                "fermee",
-                "Relais désactivé côté ESP32",
-                "ESP32-Wokwi MQTT"
-            )
+    if payload_upper == "CLOSED":
+        changer_etat_porte(
+            "fermee",
+            "Relais désactivé côté ESP32",
+            "ESP32-Wokwi MQTT"
+        )
+        return
+
+    print("Message MQTT reçu mais non traité :", payload)
+
 
 def start_mqtt():
     global mqtt_client
@@ -175,9 +186,9 @@ def publier_commande_mqtt(commande):
     return publier_mqtt(TOPIC_COMMAND, commande)
 
 
-# ==========================
+# =========================================================
 # ROUTES FLASK
-# ==========================
+# =========================================================
 @app.route("/")
 def accueil():
     return f"""
@@ -253,12 +264,16 @@ def accueil():
             <div class="card">
                 <h1>Interphone vidéo connecté</h1>
                 <p class="subtitle">
-                    Serveur Flask — galerie visiteurs horodatée, historique, MQTT et commande relais.
+                    Serveur Flask — galerie visiteurs horodatée, MQTT, historique et commande relais.
                 </p>
 
                 <div class="status">
                     <strong>MQTT :</strong> {"connecté" if mqtt_connected else "non connecté"}<br>
                     <strong>Broker :</strong> {MQTT_BROKER}:{MQTT_PORT}<br>
+                    <strong>Topic visiteur :</strong> {TOPIC_VISITOR}<br>
+                    <strong>Topic commande :</strong> {TOPIC_COMMAND}<br>
+                    <strong>Topic statut :</strong> {TOPIC_STATUS}<br><br>
+
                     <strong>État de la porte :</strong> {etat_porte["etat"]}<br>
                     <strong>Dernier changement :</strong> {etat_porte["dernier_changement"]}<br>
                     <strong>Dernière commande :</strong> {etat_porte["commande"]}<br>
@@ -266,22 +281,22 @@ def accueil():
                 </div>
 
                 <div class="grid">
-                    <a class="button" href="/sonnette">Simuler une sonnerie locale</a>
+                    <a class="button" href="/sonnette">Ajouter visiteur test</a>
                     <a class="button" href="/visiteurs">Galerie visiteurs</a>
                     <a class="button secondary" href="/api/visiteurs">API JSON visiteurs</a>
-                    <a class="button" href="/ouvrir">Ouvrir la porte MQTT</a>
-                    <a class="button secondary" href="/fermer">Fermer la porte MQTT</a>
-                    <a class="button secondary" href="/etat-porte">État de la porte</a>
+                    <a class="button" href="/ouvrir">Ouvrir porte MQTT</a>
+                    <a class="button secondary" href="/fermer">Fermer porte MQTT</a>
+                    <a class="button secondary" href="/etat-porte">État porte</a>
                     <a class="button secondary" href="/mqtt-info">Infos MQTT</a>
                     <a class="button secondary" href="/mqtt-logs">Logs MQTT</a>
-                    <a class="button secondary" href="/test-mqtt-visitor">Tester visiteur MQTT</a>
-                    <a class="button danger" href="/reset">Réinitialiser historique</a>
+                    <a class="button secondary" href="/test-mqtt-visitor">Test MQTT visiteur</a>
+                    <a class="button danger" href="/reset">Réinitialiser</a>
                 </div>
 
                 <p class="small">
-                    L’ESP32 Wokwi publie les événements de sonnerie via MQTT.
-                    Flask enregistre automatiquement les visiteurs.
-                    Kivy commande la porte via Flask, puis Flask publie OPEN/CLOSE vers l’ESP32.
+                    Wokwi publie VISITOR via MQTT. Flask reçoit automatiquement l’événement
+                    et ajoute le visiteur à l’historique. Kivy appelle Flask pour ouvrir ou fermer la porte,
+                    puis Flask envoie OPEN/CLOSE à Wokwi via MQTT.
                 </p>
             </div>
         </div>
@@ -330,6 +345,7 @@ def afficher_visiteurs():
                     <p><strong>Date :</strong> {visite['date']}</p>
                     <p><strong>Heure :</strong> {visite['heure']}</p>
                     <p><strong>Message :</strong> {visite['message']}</p>
+                    <p><strong>Photo :</strong> {visite['photo']}</p>
                     <p><strong>Source :</strong> {visite['source']}</p>
                 </div>
             </div>
@@ -531,19 +547,20 @@ def mqtt_info():
 def voir_mqtt_logs():
     return jsonify({
         "status": "success",
-        "logs": mqtt_logs[-30:]
+        "logs": mqtt_logs[-50:]
     })
 
 
 @app.route("/test-mqtt-visitor")
 def test_mqtt_visitor():
-    ok, message = publier_mqtt(TOPIC_VISITOR, "VISITOR")
+    payload = f"VISITOR:{int(time.time())}"
+    ok, message = publier_mqtt(TOPIC_VISITOR, payload)
 
     return jsonify({
         "status": "success" if ok else "error",
         "message": message,
         "topic": TOPIC_VISITOR,
-        "payload": "VISITOR"
+        "payload": payload
     })
 
 
@@ -558,9 +575,9 @@ def reset_historique():
     })
 
 
-# ==========================
+# =========================================================
 # DÉMARRAGE MQTT
-# ==========================
+# =========================================================
 mqtt_thread = threading.Thread(target=start_mqtt)
 mqtt_thread.daemon = True
 mqtt_thread.start()
