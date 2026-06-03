@@ -10,7 +10,7 @@ app = Flask(__name__)
 # =========================================================
 # MQTT CONFIGURATION
 # =========================================================
-MQTT_BROKER = "broker.hivemq.com"
+MQTT_BROKER = "test.mosquitto.org"
 MQTT_PORT = 1883
 
 TOPIC_VISITOR = "interphone/rakezyadiams/v2/visitor"
