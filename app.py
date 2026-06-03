@@ -73,6 +73,28 @@ def get_photo_url():
 # =========================================================
 # MQTT CALLBACKS
 # =========================================================
+def on_connect(client, userdata, flags, rc):
+    global mqtt_connected
+
+    if rc == 0:
+        mqtt_connected = True
+        print("MQTT connecté au broker HiveMQ")
+
+        client.subscribe("interphone/rakezyadiams/v2/#")
+
+        print("Abonné au topic global :")
+        print("- interphone/rakezyadiams/v2/#")
+    else:
+        mqtt_connected = False
+        print("Erreur connexion MQTT, code :", rc)
+
+
+def on_disconnect(client, userdata, rc):
+    global mqtt_connected
+    mqtt_connected = False
+    print("MQTT déconnecté, code :", rc)
+
+
 def on_message(client, userdata, msg):
     topic = msg.topic
     payload = msg.payload.decode("utf-8", errors="ignore").strip()
@@ -109,48 +131,7 @@ def on_message(client, userdata, msg):
             "Relais désactivé côté ESP32",
             "ESP32-Wokwi MQTT"
         )
-        return    global mqtt_connected
-    mqtt_connected = False
-    print("MQTT déconnecté, code :", rc)
-
-
-def on_message(client, userdata, msg):
-    topic = msg.topic
-    payload = msg.payload.decode("utf-8", errors="ignore").strip()
-    payload_upper = payload.upper()
-
-    print("MQTT reçu :", topic, "=>", payload)
-
-    mqtt_logs.append({
-        "topic": topic,
-        "payload": payload,
-        "time": datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    })
-
-    # Si Wokwi envoie VISITOR, VISITOR:12345, VISITEUR, SONNETTE...
-    if payload_upper.startswith("VISITOR") or payload_upper.startswith("VISITEUR") or payload_upper.startswith("SONNETTE"):
-        ajouter_visiteur(source="ESP32-Wokwi MQTT")
-        print("Visiteur ajouté depuis Wokwi MQTT")
         return
-
-    # Statut porte
-    if payload_upper == "OPENED":
-        changer_etat_porte(
-            "ouverte",
-            "Relais activé côté ESP32",
-            "ESP32-Wokwi MQTT"
-        )
-        return
-
-    if payload_upper == "CLOSED":
-        changer_etat_porte(
-            "fermee",
-            "Relais désactivé côté ESP32",
-            "ESP32-Wokwi MQTT"
-        )
-        return
-
-    print("Message MQTT reçu mais non traité :", payload)
 
 def start_mqtt():
     global mqtt_client
